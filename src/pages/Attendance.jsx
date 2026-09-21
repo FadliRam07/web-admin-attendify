@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import Sidebar from '../components/Sidebar';
-import { Download, Filter, Search, MapPin, X } from 'lucide-react';
+import { Download, Filter, Search, MapPin, X, ImageOff } from 'lucide-react';
 import { fmtTime, fmtDate, fmtDuration, getTodayWIB } from '../lib/formatTime';
 
 export default function Attendance() {
@@ -21,6 +21,11 @@ export default function Attendance() {
   });
   const [toDate, setToDate] = useState(getTodayWIB());
   const [selectedLog, setSelectedLog] = useState(null);
+  
+  // ============ SIGNED URL STATE ============
+  const [checkInSignedUrl, setCheckInSignedUrl] = useState(null);
+  const [checkOutSignedUrl, setCheckOutSignedUrl] = useState(null);
+  const [photoLoading, setPhotoLoading] = useState(false);
 
   useEffect(() => {
     fetchLogs();
@@ -40,6 +45,59 @@ export default function Attendance() {
       })
     );
   }, [search, statusFilter, logs]);
+
+  // ============ GENERATE SIGNED URL ============
+  const getSignedUrl = async (path) => {
+    if (!path) return null;
+    
+    // Kalau sudah URL lengkap (http), return langsung
+    if (path.startsWith('http')) return path;
+    
+    try {
+      const { data, error } = await supabase.storage
+        .from('attendance-photos')
+        .createSignedUrl(path, 3600); // Berlaku 1 jam
+      
+      if (error) {
+        console.error('Signed URL error:', error);
+        return null;
+      }
+      
+      return data?.signedUrl || null;
+    } catch (e) {
+      console.error('Signed URL exception:', e);
+      return null;
+    }
+  };
+
+  // ============ OPEN DETAIL DENGAN SIGNED URL ============
+  const handleOpenDetail = async (log) => {
+    setSelectedLog(log);
+    setPhotoLoading(true);
+    setCheckInSignedUrl(null);
+    setCheckOutSignedUrl(null);
+
+    try {
+      const [checkInUrl, checkOutUrl] = await Promise.all([
+        log.check_in_photo ? getSignedUrl(log.check_in_photo) : Promise.resolve(null),
+        log.check_out_photo ? getSignedUrl(log.check_out_photo) : Promise.resolve(null),
+      ]);
+
+      setCheckInSignedUrl(checkInUrl);
+      setCheckOutSignedUrl(checkOutUrl);
+    } catch (e) {
+      console.error('Error loading photos:', e);
+    } finally {
+      setPhotoLoading(false);
+    }
+  };
+
+  // ============ CLOSE DETAIL ============
+  const handleCloseDetail = () => {
+    setSelectedLog(null);
+    setCheckInSignedUrl(null);
+    setCheckOutSignedUrl(null);
+  };
 
   const fetchLogs = async () => {
     setLoading(true);
@@ -205,7 +263,10 @@ export default function Attendance() {
                       </td>
                       <td className="py-3 px-3 text-gray-600 whitespace-nowrap">{fmtDuration(log.work_duration)}</td>
                       <td className="py-3 px-3">
-                        <button onClick={() => setSelectedLog(log)} className="inline-flex items-center gap-1 px-2 sm:px-3 py-1.5 bg-blue-100 text-blue-700 rounded-lg text-[10px] sm:text-xs font-semibold hover:bg-blue-500 hover:text-white whitespace-nowrap">
+                        <button
+                          onClick={() => handleOpenDetail(log)}
+                          className="inline-flex items-center gap-1 px-2 sm:px-3 py-1.5 bg-blue-100 text-blue-700 rounded-lg text-[10px] sm:text-xs font-semibold hover:bg-blue-500 hover:text-white whitespace-nowrap"
+                        >
                           <MapPin size={12} /> Lihat
                         </button>
                       </td>
@@ -218,46 +279,117 @@ export default function Attendance() {
         </div>
       </main>
 
+      {/* ============ MODAL DETAIL ============ */}
       {selectedLog && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 animate-fadeIn" onClick={() => setSelectedLog(null)}>
-          <div className="bg-white rounded-2xl p-4 sm:p-7 w-full max-w-3xl max-h-[90vh] overflow-y-auto shadow-2xl animate-slideUp" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 animate-fadeIn"
+          onClick={handleCloseDetail}
+        >
+          <div
+            className="bg-white rounded-2xl p-4 sm:p-7 w-full max-w-3xl max-h-[90vh] overflow-y-auto shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex justify-between items-center mb-4 sm:mb-5">
               <h3 className="text-brand-600 font-bold text-sm sm:text-lg">
                 Detail — {selectedLog.profiles?.full_name}
               </h3>
-              <button onClick={() => setSelectedLog(null)} className="text-gray-400 hover:text-gray-700"><X size={20} /></button>
+              <button onClick={handleCloseDetail} className="text-gray-400 hover:text-gray-700">
+                <X size={20} />
+              </button>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Check In */}
               <div className="border rounded-xl p-3 sm:p-4">
                 <h4 className="font-semibold text-emerald-600 mb-3 text-sm">Check In</h4>
-                {selectedLog.check_in_photo ? (
-                  <img src={selectedLog.check_in_photo} alt="Check In" className="w-full h-40 sm:h-48 object-cover rounded-lg mb-3" />
+                {photoLoading ? (
+                  <div className="w-full h-40 sm:h-48 bg-gray-100 rounded-lg flex items-center justify-center mb-3">
+                    <div className="w-8 h-8 border-4 border-gray-200 border-t-emerald-500 rounded-full animate-spin"></div>
+                  </div>
+                ) : selectedLog.check_in_photo ? (
+                  checkInSignedUrl ? (
+                    <img
+                      src={checkInSignedUrl}
+                      alt="Check In"
+                      className="w-full h-40 sm:h-48 object-cover rounded-lg mb-3"
+                      onError={(e) => {
+                        e.target.style.display = 'none';
+                        e.target.nextSibling.style.display = 'flex';
+                      }}
+                    />
+                  ) : (
+                    <div className="w-full h-40 sm:h-48 bg-red-50 rounded-lg flex flex-col items-center justify-center text-red-400 text-sm mb-3 gap-2">
+                      <ImageOff size={24} />
+                      <span>Gagal memuat foto</span>
+                    </div>
+                  )
                 ) : (
-                  <div className="w-full h-40 sm:h-48 bg-gray-100 rounded-lg flex items-center justify-center text-gray-400 text-sm mb-3">Tidak ada foto</div>
+                  <div className="w-full h-40 sm:h-48 bg-gray-100 rounded-lg flex items-center justify-center text-gray-400 text-sm mb-3">
+                    Tidak ada foto
+                  </div>
                 )}
-                <p className="text-sm text-gray-600 mb-1">🕐 {fmtTime(selectedLog.check_in)} WIB</p>
+                <p className="text-sm text-gray-600 mb-1">
+                  <span className="font-semibold">Jam:</span> {fmtTime(selectedLog.check_in)} WIB
+                </p>
                 <p className="text-xs text-gray-500 mb-2 break-all">
-                  📍 {selectedLog.check_in_latitude?.toFixed(6) || '-'}, {selectedLog.check_in_longitude?.toFixed(6) || '-'}
+                  <span className="font-semibold">Lokasi:</span> {selectedLog.check_in_latitude?.toFixed(6) || '-'}, {selectedLog.check_in_longitude?.toFixed(6) || '-'}
                 </p>
                 {selectedLog.check_in_latitude && (
-                  <a href={`https://www.google.com/maps?q=${selectedLog.check_in_latitude},${selectedLog.check_in_longitude}`} target="_blank" rel="noreferrer" className="text-xs text-blue-600 underline">Buka di Google Maps</a>
+                  <a
+                    href={`https://www.google.com/maps?q=${selectedLog.check_in_latitude},${selectedLog.check_in_longitude}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs text-blue-600 underline"
+                  >
+                    Buka di Google Maps
+                  </a>
                 )}
               </div>
 
+              {/* Check Out */}
               <div className="border rounded-xl p-3 sm:p-4">
                 <h4 className="font-semibold text-brand-600 mb-3 text-sm">Check Out</h4>
-                {selectedLog.check_out_photo ? (
-                  <img src={selectedLog.check_out_photo} alt="Check Out" className="w-full h-40 sm:h-48 object-cover rounded-lg mb-3" />
+                {photoLoading ? (
+                  <div className="w-full h-40 sm:h-48 bg-gray-100 rounded-lg flex items-center justify-center mb-3">
+                    <div className="w-8 h-8 border-4 border-gray-200 border-t-brand-600 rounded-full animate-spin"></div>
+                  </div>
+                ) : selectedLog.check_out_photo ? (
+                  checkOutSignedUrl ? (
+                    <img
+                      src={checkOutSignedUrl}
+                      alt="Check Out"
+                      className="w-full h-40 sm:h-48 object-cover rounded-lg mb-3"
+                      onError={(e) => {
+                        e.target.style.display = 'none';
+                        e.target.nextSibling.style.display = 'flex';
+                      }}
+                    />
+                  ) : (
+                    <div className="w-full h-40 sm:h-48 bg-red-50 rounded-lg flex flex-col items-center justify-center text-red-400 text-sm mb-3 gap-2">
+                      <ImageOff size={24} />
+                      <span>Gagal memuat foto</span>
+                    </div>
+                  )
                 ) : (
-                  <div className="w-full h-40 sm:h-48 bg-gray-100 rounded-lg flex items-center justify-center text-gray-400 text-sm mb-3">Tidak ada foto</div>
+                  <div className="w-full h-40 sm:h-48 bg-gray-100 rounded-lg flex items-center justify-center text-gray-400 text-sm mb-3">
+                    Tidak ada foto
+                  </div>
                 )}
-                <p className="text-sm text-gray-600 mb-1">🕐 {fmtTime(selectedLog.check_out)} WIB</p>
+                <p className="text-sm text-gray-600 mb-1">
+                  <span className="font-semibold">Jam:</span> {fmtTime(selectedLog.check_out)} WIB
+                </p>
                 <p className="text-xs text-gray-500 mb-2 break-all">
-                  📍 {selectedLog.check_out_latitude?.toFixed(6) || '-'}, {selectedLog.check_out_longitude?.toFixed(6) || '-'}
+                  <span className="font-semibold">Lokasi:</span> {selectedLog.check_out_latitude?.toFixed(6) || '-'}, {selectedLog.check_out_longitude?.toFixed(6) || '-'}
                 </p>
                 {selectedLog.check_out_latitude && (
-                  <a href={`https://www.google.com/maps?q=${selectedLog.check_out_latitude},${selectedLog.check_out_longitude}`} target="_blank" rel="noreferrer" className="text-xs text-blue-600 underline">Buka di Google Maps</a>
+                  <a
+                    href={`https://www.google.com/maps?q=${selectedLog.check_out_latitude},${selectedLog.check_out_longitude}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs text-blue-600 underline"
+                  >
+                    Buka di Google Maps
+                  </a>
                 )}
               </div>
             </div>
