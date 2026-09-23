@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import Sidebar from '../components/Sidebar';
-import { Check, X, FileText, Search, AlertCircle } from 'lucide-react';
+import { Check, X, FileText, Search, AlertCircle, ExternalLink } from 'lucide-react';
 
 export default function LeaveRequests() {
   const [leaves, setLeaves] = useState([]);
@@ -10,6 +10,10 @@ export default function LeaveRequests() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [debugMsg, setDebugMsg] = useState('');
+
+  // ============ SIGNED URL CACHE ============
+  const [signedUrls, setSignedUrls] = useState({});
+  const [loadingUrls, setLoadingUrls] = useState({});
 
   useEffect(() => { fetchLeaves(); }, []);
 
@@ -52,6 +56,63 @@ export default function LeaveRequests() {
     const joined = (data || []).map((l) => ({ ...l, profiles: profMap[l.user_id] }));
     setLeaves(joined);
     setLoading(false);
+  };
+
+  // ============ GENERATE SIGNED URL ============
+  const getSignedUrl = async (path) => {
+    if (!path) return null;
+    
+    // Kalau sudah URL lengkap (http), return langsung
+    if (path.startsWith('http')) return path;
+    
+    try {
+      const { data, error } = await supabase.storage
+        .from('leave-attachments')
+        .createSignedUrl(path, 3600); // Berlaku 1 jam
+      
+      if (error) {
+        console.error('Signed URL error:', error);
+        return null;
+      }
+      
+      return data?.signedUrl || null;
+    } catch (e) {
+      console.error('Signed URL exception:', e);
+      return null;
+    }
+  };
+
+  // ============ OPEN ATTACHMENT ============
+  const handleOpenAttachment = async (leave) => {
+    const id = leave.id;
+    const path = leave.attachment_url;
+
+    if (!path) return;
+
+    // Kalau sudah ada signed URL di cache
+    if (signedUrls[id]) {
+      window.open(signedUrls[id], '_blank', 'noopener,noreferrer');
+      return;
+    }
+
+    // Generate signed URL
+    setLoadingUrls((prev) => ({ ...prev, [id]: true }));
+
+    try {
+      const url = await getSignedUrl(path);
+
+      if (url) {
+        setSignedUrls((prev) => ({ ...prev, [id]: url }));
+        window.open(url, '_blank', 'noopener,noreferrer');
+      } else {
+        alert('Gagal membuka lampiran. File mungkin sudah dihapus.');
+      }
+    } catch (e) {
+      console.error('Open attachment error:', e);
+      alert('Gagal membuka lampiran: ' + e.message);
+    } finally {
+      setLoadingUrls((prev) => ({ ...prev, [id]: false }));
+    }
   };
 
   const handleAction = async (id, status) => {
@@ -147,9 +208,28 @@ export default function LeaveRequests() {
                           <strong>{fmtDate(leave.start_date)}</strong> s/d <strong>{fmtDate(leave.end_date)}</strong>
                         </p>
                         <p className="text-xs sm:text-sm text-gray-700 mt-1 break-words">{leave.reason}</p>
+
+                        {/* ============ LAMPIRAN (SIGNED URL) ============ */}
                         {leave.attachment_url && (
-                          <a href={leave.attachment_url} target="_blank" rel="noreferrer" className="text-[10px] sm:text-xs text-blue-600 underline mt-1 inline-block">📎 Lihat Lampiran</a>
+                          <button
+                            onClick={() => handleOpenAttachment(leave)}
+                            disabled={loadingUrls[leave.id]}
+                            className="inline-flex items-center gap-1 text-[10px] sm:text-xs text-blue-600 underline mt-1 disabled:opacity-50 disabled:cursor-wait"
+                          >
+                            {loadingUrls[leave.id] ? (
+                              <>
+                                <div className="w-3 h-3 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                                <span>Memuat lampiran...</span>
+                              </>
+                            ) : (
+                              <>
+                                <ExternalLink size={12} />
+                                <span>Lihat Lampiran</span>
+                              </>
+                            )}
+                          </button>
                         )}
+
                         {leave.admin_note && (
                           <p className="text-[10px] sm:text-xs text-gray-500 mt-1 italic break-words">Catatan admin: {leave.admin_note}</p>
                         )}
