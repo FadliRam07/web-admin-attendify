@@ -22,7 +22,6 @@ export default function Attendance() {
   const [toDate, setToDate] = useState(getTodayWIB());
   const [selectedLog, setSelectedLog] = useState(null);
   
-  // ============ SIGNED URL STATE ============
   const [checkInSignedUrl, setCheckInSignedUrl] = useState(null);
   const [checkOutSignedUrl, setCheckOutSignedUrl] = useState(null);
   const [photoLoading, setPhotoLoading] = useState(false);
@@ -46,23 +45,19 @@ export default function Attendance() {
     );
   }, [search, statusFilter, logs]);
 
-  // ============ GENERATE SIGNED URL ============
   const getSignedUrl = async (path) => {
     if (!path) return null;
-    
-    // Kalau sudah URL lengkap (http), return langsung
     if (path.startsWith('http')) return path;
     
     try {
       const { data, error } = await supabase.storage
         .from('attendance-photos')
-        .createSignedUrl(path, 3600); // Berlaku 1 jam
+        .createSignedUrl(path, 3600);
       
       if (error) {
         console.error('Signed URL error:', error);
         return null;
       }
-      
       return data?.signedUrl || null;
     } catch (e) {
       console.error('Signed URL exception:', e);
@@ -70,17 +65,20 @@ export default function Attendance() {
     }
   };
 
-  // ============ OPEN DETAIL DENGAN SIGNED URL ============
   const handleOpenDetail = async (log) => {
     setSelectedLog(log);
     setPhotoLoading(true);
     setCheckInSignedUrl(null);
     setCheckOutSignedUrl(null);
 
+    const isFallback = (path) => !path || path.startsWith('fallback_');
+    const checkInPath = isFallback(log.check_in_photo) ? null : log.check_in_photo;
+    const checkOutPath = isFallback(log.check_out_photo) ? null : log.check_out_photo;
+
     try {
       const [checkInUrl, checkOutUrl] = await Promise.all([
-        log.check_in_photo ? getSignedUrl(log.check_in_photo) : Promise.resolve(null),
-        log.check_out_photo ? getSignedUrl(log.check_out_photo) : Promise.resolve(null),
+        checkInPath ? getSignedUrl(checkInPath) : Promise.resolve(null),
+        checkOutPath ? getSignedUrl(checkOutPath) : Promise.resolve(null),
       ]);
 
       setCheckInSignedUrl(checkInUrl);
@@ -92,7 +90,6 @@ export default function Attendance() {
     }
   };
 
-  // ============ CLOSE DETAIL ============
   const handleCloseDetail = () => {
     setSelectedLog(null);
     setCheckInSignedUrl(null);
@@ -133,28 +130,61 @@ export default function Attendance() {
   const initials = (n) =>
     n ? n.split(' ').map((x) => x[0]).slice(0, 2).join('').toUpperCase() : '?';
 
+  // ============ EXPORT CSV (DIPERBAIKI) ============
   const exportCSV = () => {
-    const rows = [
-      ['Nama', 'Email', 'Tanggal', 'Check In', 'Check Out', 'Telat (mnt)', 'Durasi', 'Lat In', 'Lng In', 'Status'],
-      ...filtered.map((l) => [
-        l.profiles?.full_name || '-',
-        l.profiles?.email || '-',
-        fmtDate(l.attendance_date),
-        fmtTime(l.check_in),
-        fmtTime(l.check_out),
-        l.late_minutes || 0,
-        fmtDuration(l.work_duration),
-        l.check_in_latitude || '',
-        l.check_in_longitude || '',
-        l.status || '-',
-      ]),
+    // Format tanggal+jam export
+    const now = new Date();
+    const timestamp = now.toLocaleString('id-ID', {
+      day: '2-digit', month: '2-digit', year: 'numeric',
+      hour: '2-digit', minute: '2-digit',
+    }).replace(/[/:]/g, '-').replace(/,\s/g, '_');
+
+    // Header kolom
+    const headers = [
+      'No',
+      'Nama Karyawan',
+      'Email',
+      'Tanggal',
+      'Jam Masuk',
+      'Jam Pulang',
+      'Menit Terlambat',
+      'Durasi Kerja (menit)',
+      'Latitude Masuk',
+      'Longitude Masuk',
+      'Status',
     ];
-    const csv = rows.map((r) => r.map((c) => `"${c}"`).join(',')).join('\n');
-    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+
+    // Data rows
+    const rows = filtered.map((l, index) => [
+      index + 1,
+      l.profiles?.full_name || '-',
+      l.profiles?.email || '-',
+      fmtDate(l.attendance_date),
+      fmtTime(l.check_in),
+      fmtTime(l.check_out),
+      l.late_minutes || 0,
+      l.work_duration || 0,
+      l.check_in_latitude ? l.check_in_latitude.toFixed(6) : '',
+      l.check_in_longitude ? l.check_in_longitude.toFixed(6) : '',
+      l.late_minutes > 0 ? 'Terlambat' : 'Tepat Waktu',
+    ]);
+
+    // Pakai tanda ; (semicolon) biar Excel Indonesia langsung pisah kolom
+    const csvContent = [
+      headers.join(';'),
+      ...rows.map((r) => r.map((c) => `"${c}"`).join(';')),
+    ].join('\n');
+
+    // Tambahkan BOM biar Excel baca UTF-8 dengan benar
+    const blob = new Blob(['\ufeff' + csvContent], {
+      type: 'text/csv;charset=utf-8;',
+    });
+
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `absensi_${fromDate}_${toDate}.csv`;
+    a.download = `Rekap-Absensi_${fromDate}_sd_${toDate}_${timestamp}.csv`;
     a.click();
+    URL.revokeObjectURL(a.href);
   };
 
   return (
@@ -279,16 +309,9 @@ export default function Attendance() {
         </div>
       </main>
 
-      {/* ============ MODAL DETAIL ============ */}
       {selectedLog && (
-        <div
-          className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 animate-fadeIn"
-          onClick={handleCloseDetail}
-        >
-          <div
-            className="bg-white rounded-2xl p-4 sm:p-7 w-full max-w-3xl max-h-[90vh] overflow-y-auto shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 animate-fadeIn" onClick={handleCloseDetail}>
+          <div className="bg-white rounded-2xl p-4 sm:p-7 w-full max-w-3xl max-h-[90vh] overflow-y-auto shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-4 sm:mb-5">
               <h3 className="text-brand-600 font-bold text-sm sm:text-lg">
                 Detail — {selectedLog.profiles?.full_name}
@@ -299,7 +322,6 @@ export default function Attendance() {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Check In */}
               <div className="border rounded-xl p-3 sm:p-4">
                 <h4 className="font-semibold text-emerald-600 mb-3 text-sm">Check In</h4>
                 {photoLoading ? (
@@ -308,15 +330,7 @@ export default function Attendance() {
                   </div>
                 ) : selectedLog.check_in_photo ? (
                   checkInSignedUrl ? (
-                    <img
-                      src={checkInSignedUrl}
-                      alt="Check In"
-                      className="w-full h-40 sm:h-48 object-cover rounded-lg mb-3"
-                      onError={(e) => {
-                        e.target.style.display = 'none';
-                        e.target.nextSibling.style.display = 'flex';
-                      }}
-                    />
+                    <img src={checkInSignedUrl} alt="Check In" className="w-full h-40 sm:h-48 object-cover rounded-lg mb-3" />
                   ) : (
                     <div className="w-full h-40 sm:h-48 bg-red-50 rounded-lg flex flex-col items-center justify-center text-red-400 text-sm mb-3 gap-2">
                       <ImageOff size={24} />
@@ -335,18 +349,12 @@ export default function Attendance() {
                   <span className="font-semibold">Lokasi:</span> {selectedLog.check_in_latitude?.toFixed(6) || '-'}, {selectedLog.check_in_longitude?.toFixed(6) || '-'}
                 </p>
                 {selectedLog.check_in_latitude && (
-                  <a
-                    href={`https://www.google.com/maps?q=${selectedLog.check_in_latitude},${selectedLog.check_in_longitude}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-xs text-blue-600 underline"
-                  >
+                  <a href={`https://www.google.com/maps?q=${selectedLog.check_in_latitude},${selectedLog.check_in_longitude}`} target="_blank" rel="noreferrer" className="text-xs text-blue-600 underline">
                     Buka di Google Maps
                   </a>
                 )}
               </div>
 
-              {/* Check Out */}
               <div className="border rounded-xl p-3 sm:p-4">
                 <h4 className="font-semibold text-brand-600 mb-3 text-sm">Check Out</h4>
                 {photoLoading ? (
@@ -355,15 +363,7 @@ export default function Attendance() {
                   </div>
                 ) : selectedLog.check_out_photo ? (
                   checkOutSignedUrl ? (
-                    <img
-                      src={checkOutSignedUrl}
-                      alt="Check Out"
-                      className="w-full h-40 sm:h-48 object-cover rounded-lg mb-3"
-                      onError={(e) => {
-                        e.target.style.display = 'none';
-                        e.target.nextSibling.style.display = 'flex';
-                      }}
-                    />
+                    <img src={checkOutSignedUrl} alt="Check Out" className="w-full h-40 sm:h-48 object-cover rounded-lg mb-3" />
                   ) : (
                     <div className="w-full h-40 sm:h-48 bg-red-50 rounded-lg flex flex-col items-center justify-center text-red-400 text-sm mb-3 gap-2">
                       <ImageOff size={24} />
@@ -382,12 +382,7 @@ export default function Attendance() {
                   <span className="font-semibold">Lokasi:</span> {selectedLog.check_out_latitude?.toFixed(6) || '-'}, {selectedLog.check_out_longitude?.toFixed(6) || '-'}
                 </p>
                 {selectedLog.check_out_latitude && (
-                  <a
-                    href={`https://www.google.com/maps?q=${selectedLog.check_out_latitude},${selectedLog.check_out_longitude}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-xs text-blue-600 underline"
-                  >
+                  <a href={`https://www.google.com/maps?q=${selectedLog.check_out_latitude},${selectedLog.check_out_longitude}`} target="_blank" rel="noreferrer" className="text-xs text-blue-600 underline">
                     Buka di Google Maps
                   </a>
                 )}

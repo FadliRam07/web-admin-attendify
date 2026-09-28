@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import Sidebar from '../components/Sidebar';
-import { Check, X, FileText, Search, AlertCircle, ExternalLink } from 'lucide-react';
+import { Check, X, FileText, Search, AlertCircle, ExternalLink, Download } from 'lucide-react';
 
 export default function LeaveRequests() {
   const [leaves, setLeaves] = useState([]);
@@ -11,7 +11,6 @@ export default function LeaveRequests() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [debugMsg, setDebugMsg] = useState('');
 
-  // ============ SIGNED URL CACHE ============
   const [signedUrls, setSignedUrls] = useState({});
   const [loadingUrls, setLoadingUrls] = useState({});
 
@@ -58,23 +57,19 @@ export default function LeaveRequests() {
     setLoading(false);
   };
 
-  // ============ GENERATE SIGNED URL ============
   const getSignedUrl = async (path) => {
     if (!path) return null;
-    
-    // Kalau sudah URL lengkap (http), return langsung
     if (path.startsWith('http')) return path;
     
     try {
       const { data, error } = await supabase.storage
         .from('leave-attachments')
-        .createSignedUrl(path, 3600); // Berlaku 1 jam
+        .createSignedUrl(path, 3600);
       
       if (error) {
         console.error('Signed URL error:', error);
         return null;
       }
-      
       return data?.signedUrl || null;
     } catch (e) {
       console.error('Signed URL exception:', e);
@@ -82,20 +77,17 @@ export default function LeaveRequests() {
     }
   };
 
-  // ============ OPEN ATTACHMENT ============
   const handleOpenAttachment = async (leave) => {
     const id = leave.id;
     const path = leave.attachment_url;
 
     if (!path) return;
 
-    // Kalau sudah ada signed URL di cache
     if (signedUrls[id]) {
       window.open(signedUrls[id], '_blank', 'noopener,noreferrer');
       return;
     }
 
-    // Generate signed URL
     setLoadingUrls((prev) => ({ ...prev, [id]: true }));
 
     try {
@@ -134,16 +126,89 @@ export default function LeaveRequests() {
   };
 
   const fmtDate = (d) => d ? new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
+  const fmtDateTime = (d) => d ? new Date(d).toLocaleString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-';
   const initials = (n) => n ? n.split(' ').map((x) => x[0]).slice(0, 2).join('').toUpperCase() : '?';
   const typeLabel = { leave: 'Cuti', sick: 'Sakit', permission: 'Izin', official_duty: 'Tugas Dinas' };
+
+  // Hitung jumlah hari
+  const hitungHari = (start, end) => {
+    if (!start || !end) return 0;
+    const s = new Date(start);
+    const e = new Date(end);
+    const diff = Math.ceil((e - s) / (1000 * 60 * 60 * 24)) + 1;
+    return diff > 0 ? diff : 0;
+  };
+
+  // ============ EXPORT CSV IZIN/CUTI/SAKIT ============
+  const exportCSV = () => {
+    const now = new Date();
+    const timestamp = now.toLocaleString('id-ID', {
+      day: '2-digit', month: '2-digit', year: 'numeric',
+      hour: '2-digit', minute: '2-digit',
+    }).replace(/[/:]/g, '-').replace(/,\s/g, '_');
+
+    const headers = [
+      'No',
+      'Nama Karyawan',
+      'Email',
+      'Jenis',
+      'Tanggal Mulai',
+      'Tanggal Selesai',
+      'Total Hari',
+      'Alasan',
+      'Status',
+      'Catatan Admin',
+      'Tanggal Pengajuan',
+      'Tanggal Approve',
+    ];
+
+    const rows = filtered.map((l, index) => [
+      index + 1,
+      l.profiles?.full_name || '-',
+      l.profiles?.email || '-',
+      typeLabel[l.type] || l.type,
+      fmtDate(l.start_date),
+      fmtDate(l.end_date),
+      hitungHari(l.start_date, l.end_date),
+      l.reason || '-',
+      l.status === 'approved' ? 'Disetujui' : l.status === 'rejected' ? 'Ditolak' : 'Pending',
+      l.admin_note || '-',
+      fmtDateTime(l.created_at),
+      l.approved_at ? fmtDateTime(l.approved_at) : '-',
+    ]);
+
+    const csvContent = [
+      headers.join(';'),
+      ...rows.map((r) => r.map((c) => `"${c}"`).join(';')),
+    ].join('\n');
+
+    const blob = new Blob(['\ufeff' + csvContent], {
+      type: 'text/csv;charset=utf-8;',
+    });
+
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `Rekap-Izin-Cuti-Sakit_${timestamp}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
 
   return (
     <div className="flex min-h-screen bg-gray-50">
       <Sidebar />
       <main className="flex-1 p-4 pt-20 sm:p-6 sm:pt-20 lg:p-8 lg:pt-8 min-w-0">
-        <div className="mb-5">
-          <h1 className="text-xl sm:text-2xl font-bold text-brand-600">Pengajuan Cuti & Izin</h1>
-          <p className="text-gray-500 text-xs sm:text-sm mt-1">Approve atau tolak pengajuan karyawan</p>
+        <div className="flex flex-wrap justify-between items-center gap-3 mb-5">
+          <div>
+            <h1 className="text-xl sm:text-2xl font-bold text-brand-600">Pengajuan Cuti & Izin</h1>
+            <p className="text-gray-500 text-xs sm:text-sm mt-1">Approve atau tolak pengajuan karyawan</p>
+          </div>
+          <button
+            onClick={exportCSV}
+            disabled={filtered.length === 0}
+            className="inline-flex items-center gap-2 px-3 sm:px-5 py-2 sm:py-2.5 bg-gradient-to-br from-brand-600 to-brand-500 text-white font-semibold text-xs sm:text-sm rounded-xl hover:-translate-y-0.5 hover:shadow-lg disabled:opacity-50"
+          >
+            <Download size={14} /> Export CSV
+          </button>
         </div>
 
         {debugMsg && (
@@ -205,11 +270,10 @@ export default function LeaveRequests() {
                         </div>
                         <p className="text-[10px] sm:text-xs text-gray-400 mt-0.5 truncate">{leave.profiles?.email}</p>
                         <p className="text-xs sm:text-sm text-gray-600 mt-2">
-                          <strong>{fmtDate(leave.start_date)}</strong> s/d <strong>{fmtDate(leave.end_date)}</strong>
+                          <strong>{fmtDate(leave.start_date)}</strong> s/d <strong>{fmtDate(leave.end_date)}</strong> ({hitungHari(leave.start_date, leave.end_date)} hari)
                         </p>
                         <p className="text-xs sm:text-sm text-gray-700 mt-1 break-words">{leave.reason}</p>
 
-                        {/* ============ LAMPIRAN (SIGNED URL) ============ */}
                         {leave.attachment_url && (
                           <button
                             onClick={() => handleOpenAttachment(leave)}
