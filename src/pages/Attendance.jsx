@@ -3,6 +3,8 @@ import { supabase } from '../lib/supabaseClient';
 import Sidebar from '../components/Sidebar';
 import { Download, Filter, Search, MapPin, X, ImageOff } from 'lucide-react';
 import { fmtTime, fmtDate, fmtDuration, getTodayWIB } from '../lib/formatTime';
+import ExcelJS from 'exceljs';
+import { saveAs } from 'file-saver';
 
 export default function Attendance() {
   const [logs, setLogs] = useState([]);
@@ -130,61 +132,273 @@ export default function Attendance() {
   const initials = (n) =>
     n ? n.split(' ').map((x) => x[0]).slice(0, 2).join('').toUpperCase() : '?';
 
-  // ============ EXPORT CSV (DIPERBAIKI) ============
-  const exportCSV = () => {
-    // Format tanggal+jam export
+  // ============ EXPORT EXCEL (FORMAT TABEL RAPI) ============
+  const exportExcel = async () => {
+    // ============ 1. BUAT WORKBOOK ============
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Attendify Admin Panel';
+    wb.created = new Date();
+
+    const ws = wb.addWorksheet('Rekap Absensi', {
+      pageSetup: {
+        paperSize: 9, // A4
+        orientation: 'landscape',
+        fitToPage: true,
+        fitToWidth: 1,
+        fitToHeight: 0,
+        margins: {
+          left: 0.5, right: 0.5,
+          top: 0.7, bottom: 0.7,
+          header: 0.3, footer: 0.3,
+        },
+      },
+    });
+
+    // ============ 2. JUDUL LAPORAN ============
+    ws.mergeCells('A1:K1');
+    const titleCell = ws.getCell('A1');
+    titleCell.value = 'REKAP ABSENSI KARYAWAN';
+    titleCell.font = {
+      name: 'Calibri',
+      size: 16,
+      bold: true,
+      color: { argb: 'FF4A3428' },
+    };
+    titleCell.alignment = { vertical: 'middle', horizontal: 'center' };
+    ws.getRow(1).height = 30;
+
+    // Subtitle: Periode
+    ws.mergeCells('A2:K2');
+    const subtitleCell = ws.getCell('A2');
+    subtitleCell.value = `PT Icommits Karya Solusi  |  Periode: ${fmtDate(fromDate)} s/d ${fmtDate(toDate)}`;
+    subtitleCell.font = {
+      name: 'Calibri',
+      size: 11,
+      italic: true,
+      color: { argb: 'FF6B4E3D' },
+    };
+    subtitleCell.alignment = { vertical: 'middle', horizontal: 'center' };
+    ws.getRow(2).height = 20;
+
+    // Baris kosong
+    ws.getRow(3).height = 8;
+
+    // ============ 3. HEADER KOLOM ============
+    const headers = [
+      { key: 'no', header: 'No', width: 5 },
+      { key: 'nama', header: 'Nama Karyawan', width: 22 },
+      { key: 'email', header: 'Email', width: 26 },
+      { key: 'tanggal', header: 'Tanggal', width: 13 },
+      { key: 'masuk', header: 'Jam Masuk', width: 11 },
+      { key: 'pulang', header: 'Jam Pulang', width: 11 },
+      { key: 'telat', header: 'Menit Terlambat', width: 14 },
+      { key: 'durasi', header: 'Durasi (mnt)', width: 12 },
+      { key: 'lat', header: 'Latitude', width: 14 },
+      { key: 'lng', header: 'Longitude', width: 14 },
+      { key: 'status', header: 'Status', width: 12 },
+    ];
+
+    // Set kolom ke worksheet
+    ws.columns = headers.map((h) => ({
+      key: h.key,
+      width: h.width,
+    }));
+
+    // Isi header row di baris ke-4
+    const headerRow = ws.getRow(4);
+    headers.forEach((h, i) => {
+      headerRow.getCell(i + 1).value = h.header;
+    });
+
+    // Style header
+    headerRow.eachCell((cell) => {
+      cell.font = {
+        name: 'Calibri',
+        size: 11,
+        bold: true,
+        color: { argb: 'FFFFFFFF' },
+      };
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF6B4E3D' }, // Coklat
+      };
+      cell.alignment = {
+        vertical: 'middle',
+        horizontal: 'center',
+        wrapText: true,
+      };
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FF4A3428' } },
+        left: { style: 'thin', color: { argb: 'FF4A3428' } },
+        bottom: { style: 'thin', color: { argb: 'FF4A3428' } },
+        right: { style: 'thin', color: { argb: 'FF4A3428' } },
+      };
+    });
+    headerRow.height = 30;
+
+    // ============ 4. ISI DATA ============
+    filtered.forEach((l, index) => {
+      const rowData = [
+        index + 1,
+        l.profiles?.full_name || '-',
+        l.profiles?.email || '-',
+        fmtDate(l.attendance_date),
+        fmtTime(l.check_in),
+        fmtTime(l.check_out),
+        l.late_minutes || 0,
+        l.work_duration || 0,
+        l.check_in_latitude ? l.check_in_latitude.toFixed(6) : '-',
+        l.check_in_longitude ? l.check_in_longitude.toFixed(6) : '-',
+        l.late_minutes > 0 ? 'Terlambat' : 'Tepat Waktu',
+      ];
+
+      const row = ws.addRow(rowData);
+
+      // Style setiap cell
+      row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+        cell.font = {
+          name: 'Calibri',
+          size: 10,
+          color: { argb: 'FF2B1810' },
+        };
+        cell.alignment = {
+          vertical: 'middle',
+          horizontal: colNumber === 1 || colNumber === 7 || colNumber === 8 ? 'center' : 'left',
+        };
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'FFE5DDD1' } },
+          left: { style: 'thin', color: { argb: 'FFE5DDD1' } },
+          bottom: { style: 'thin', color: { argb: 'FFE5DDD1' } },
+          right: { style: 'thin', color: { argb: 'FFE5DDD1' } },
+        };
+
+        // Warna baris selang-seling
+        if (index % 2 === 0) {
+          cell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'FFFAF6F1' }, // Cream
+          };
+        }
+      });
+
+      // Highlight kolom Status
+      const statusCell = row.getCell(11);
+      if (l.late_minutes > 0) {
+        statusCell.font = {
+          name: 'Calibri',
+          size: 10,
+          bold: true,
+          color: { argb: 'FFC62828' }, // Merah
+        };
+      } else {
+        statusCell.font = {
+          name: 'Calibri',
+          size: 10,
+          bold: true,
+          color: { argb: 'FF2E7D32' }, // Hijau
+        };
+      }
+
+      // Highlight kolom Telat
+      if (l.late_minutes > 0) {
+        const telatCell = row.getCell(7);
+        telatCell.font = {
+          name: 'Calibri',
+          size: 10,
+          bold: true,
+          color: { argb: 'FFC62828' },
+        };
+      }
+
+      row.height = 20;
+    });
+
+    // ============ 5. BARIS TOTAL ============
+    const totalRowIndex = 5 + filtered.length;
+    ws.mergeCells(`A${totalRowIndex}:F${totalRowIndex}`);
+    const totalLabelCell = ws.getCell(`A${totalRowIndex}`);
+    totalLabelCell.value = 'TOTAL';
+    totalLabelCell.font = {
+      name: 'Calibri',
+      size: 11,
+      bold: true,
+      color: { argb: 'FFFFFFFF' },
+    };
+    totalLabelCell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF4A3428' },
+    };
+    totalLabelCell.alignment = { vertical: 'middle', horizontal: 'center' };
+
+    // Isi kolom Telat total
+    const totalTelatCell = ws.getCell(`G${totalRowIndex}`);
+    totalTelatCell.value = filtered.reduce((sum, l) => sum + (l.late_minutes || 0), 0);
+    totalTelatCell.font = { name: 'Calibri', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+    totalTelatCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4A3428' } };
+    totalTelatCell.alignment = { vertical: 'middle', horizontal: 'center' };
+
+    // Isi kolom Durasi total
+    const totalDurasiCell = ws.getCell(`H${totalRowIndex}`);
+    totalDurasiCell.value = filtered.reduce((sum, l) => sum + (l.work_duration || 0), 0);
+    totalDurasiCell.font = { name: 'Calibri', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+    totalDurasiCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4A3428' } };
+    totalDurasiCell.alignment = { vertical: 'middle', horizontal: 'center' };
+
+    // Border untuk baris total
+    for (let i = 1; i <= 11; i++) {
+      const cell = ws.getRow(totalRowIndex).getCell(i);
+      cell.border = {
+        top: { style: 'medium', color: { argb: 'FF4A3428' } },
+        left: { style: 'thin', color: { argb: 'FF4A3428' } },
+        bottom: { style: 'medium', color: { argb: 'FF4A3428' } },
+        right: { style: 'thin', color: { argb: 'FF4A3428' } },
+      };
+      if (i !== 7 && i !== 8) {
+        cell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FF4A3428' },
+        };
+        cell.font = {
+          name: 'Calibri',
+          size: 11,
+          bold: true,
+          color: { argb: 'FFFFFFFF' },
+        };
+      }
+    }
+
+    // ============ 6. FOOTER ============
+    const footerRowIndex = totalRowIndex + 2;
+    ws.mergeCells(`A${footerRowIndex}:K${footerRowIndex}`);
+    const footerCell = ws.getCell(`A${footerRowIndex}`);
     const now = new Date();
+    footerCell.value = `Dicetak pada: ${now.toLocaleString('id-ID', {
+      day: '2-digit', month: 'long', year: 'numeric',
+      hour: '2-digit', minute: '2-digit',
+    })} WIB  |  Total ${filtered.length} record`;
+    footerCell.font = {
+      name: 'Calibri',
+      size: 9,
+      italic: true,
+      color: { argb: 'FF7B5E4E' },
+    };
+    footerCell.alignment = { vertical: 'middle', horizontal: 'right' };
+
+    // ============ 7. DOWNLOAD ============
     const timestamp = now.toLocaleString('id-ID', {
       day: '2-digit', month: '2-digit', year: 'numeric',
       hour: '2-digit', minute: '2-digit',
     }).replace(/[/:]/g, '-').replace(/,\s/g, '_');
 
-    // Header kolom
-    const headers = [
-      'No',
-      'Nama Karyawan',
-      'Email',
-      'Tanggal',
-      'Jam Masuk',
-      'Jam Pulang',
-      'Menit Terlambat',
-      'Durasi Kerja (menit)',
-      'Latitude Masuk',
-      'Longitude Masuk',
-      'Status',
-    ];
-
-    // Data rows
-    const rows = filtered.map((l, index) => [
-      index + 1,
-      l.profiles?.full_name || '-',
-      l.profiles?.email || '-',
-      fmtDate(l.attendance_date),
-      fmtTime(l.check_in),
-      fmtTime(l.check_out),
-      l.late_minutes || 0,
-      l.work_duration || 0,
-      l.check_in_latitude ? l.check_in_latitude.toFixed(6) : '',
-      l.check_in_longitude ? l.check_in_longitude.toFixed(6) : '',
-      l.late_minutes > 0 ? 'Terlambat' : 'Tepat Waktu',
-    ]);
-
-    // Pakai tanda ; (semicolon) biar Excel Indonesia langsung pisah kolom
-    const csvContent = [
-      headers.join(';'),
-      ...rows.map((r) => r.map((c) => `"${c}"`).join(';')),
-    ].join('\n');
-
-    // Tambahkan BOM biar Excel baca UTF-8 dengan benar
-    const blob = new Blob(['\ufeff' + csvContent], {
-      type: 'text/csv;charset=utf-8;',
+    const buffer = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buffer], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     });
-
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `Rekap-Absensi_${fromDate}_sd_${toDate}_${timestamp}.csv`;
-    a.click();
-    URL.revokeObjectURL(a.href);
+    saveAs(blob, `Rekap-Absensi_${fromDate}_sd_${toDate}_${timestamp}.xlsx`);
   };
 
   return (
@@ -197,11 +411,11 @@ export default function Attendance() {
             <p className="text-gray-500 text-xs sm:text-sm mt-1">Riwayat absensi lengkap dengan GPS & foto</p>
           </div>
           <button
-            onClick={exportCSV}
+            onClick={exportExcel}
             disabled={filtered.length === 0}
             className="inline-flex items-center gap-2 px-3 sm:px-5 py-2 sm:py-2.5 bg-gradient-to-br from-brand-600 to-brand-500 text-white font-semibold text-xs sm:text-sm rounded-xl hover:-translate-y-0.5 hover:shadow-lg disabled:opacity-50"
           >
-            <Download size={14} /> Export CSV
+            <Download size={14} /> Export Excel
           </button>
         </div>
 
