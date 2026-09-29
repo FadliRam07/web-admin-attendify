@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import Sidebar from '../components/Sidebar';
-import { Plus, Pencil, Trash2, X, Megaphone, AlertCircle, CheckCircle } from 'lucide-react';
+import { Plus, Pencil, Trash2, X, Megaphone, AlertCircle, CheckCircle, ExternalLink, Copy } from 'lucide-react';
 
 export default function Announcements() {
   const [announcements, setAnnouncements] = useState([]);
@@ -14,6 +14,7 @@ export default function Announcements() {
     title: '',
     message: '',
     priority: 'normal',
+    link_url: '',
     is_active: true,
   });
 
@@ -40,11 +41,12 @@ export default function Announcements() {
         title: ann.title,
         message: ann.message,
         priority: ann.priority || 'normal',
+        link_url: ann.link_url || '',
         is_active: ann.is_active ?? true,
       });
     } else {
       setEditing(null);
-      setForm({ title: '', message: '', priority: 'normal', is_active: true });
+      setForm({ title: '', message: '', priority: 'normal', link_url: '', is_active: true });
     }
     setModalOpen(true);
   };
@@ -55,6 +57,11 @@ export default function Announcements() {
     setMsg(null);
 
     try {
+      let linkUrl = form.link_url.trim();
+      if (linkUrl && !linkUrl.startsWith('http://') && !linkUrl.startsWith('https://')) {
+        linkUrl = 'https://' + linkUrl;
+      }
+
       if (editing) {
         const { error } = await supabase
           .from('announcements')
@@ -62,6 +69,7 @@ export default function Announcements() {
             title: form.title,
             message: form.message,
             priority: form.priority,
+            link_url: linkUrl || null,
             is_active: form.is_active,
             updated_at: new Date().toISOString(),
           })
@@ -74,6 +82,7 @@ export default function Announcements() {
           title: form.title,
           message: form.message,
           priority: form.priority,
+          link_url: linkUrl || null,
           is_active: form.is_active,
           created_by: session?.user?.id,
         });
@@ -105,6 +114,15 @@ export default function Announcements() {
       .eq('id', ann.id);
     if (error) alert('Gagal: ' + error.message);
     else fetchAnnouncements();
+  };
+
+  const copyLink = (url) => {
+    navigator.clipboard.writeText(url).then(() => {
+      setMsg({ type: 'success', text: 'Link berhasil disalin!' });
+      setTimeout(() => setMsg(null), 2000);
+    }).catch(() => {
+      alert('Gagal menyalin link');
+    });
   };
 
   const fmtDate = (d) =>
@@ -202,6 +220,29 @@ export default function Announcements() {
                       </div>
                       <h4 className="font-bold text-gray-800 text-sm sm:text-base">{ann.title}</h4>
                       <p className="text-xs sm:text-sm text-gray-600 mt-1 break-words">{ann.message}</p>
+                      
+                      {ann.link_url && (
+                        <div className="mt-3 flex flex-wrap items-center gap-2 p-2 bg-blue-50 rounded-lg">
+                          <ExternalLink size={14} className="text-blue-600 shrink-0" />
+                          <a
+                            href={ann.link_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs text-blue-700 underline font-medium truncate flex-1 min-w-0"
+                            title={ann.link_url}
+                          >
+                            {ann.link_url}
+                          </a>
+                          <button
+                            onClick={() => copyLink(ann.link_url)}
+                            className="inline-flex items-center gap-1 px-2 py-1 bg-white border border-blue-200 text-blue-700 rounded-md text-[10px] font-semibold hover:bg-blue-100 shrink-0"
+                            title="Salin link"
+                          >
+                            <Copy size={11} /> Salin
+                          </button>
+                        </div>
+                      )}
+
                       <p className="text-[10px] sm:text-xs text-gray-400 mt-2">{fmtDate(ann.created_at)}</p>
                     </div>
                     <div className="flex gap-2 shrink-0">
@@ -271,6 +312,22 @@ export default function Announcements() {
                   placeholder="Tulis isi pengumuman di sini..."
                   className="w-full px-4 py-3 bg-gray-50 border-[1.5px] border-gray-200 rounded-xl text-sm outline-none focus:border-brand-600 focus:bg-white"
                 />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-brand-600 mb-1.5">
+                  Link (Opsional)
+                </label>
+                <input
+                  type="text"
+                  value={form.link_url}
+                  onChange={(e) => setForm({ ...form, link_url: e.target.value })}
+                  placeholder="https://contoh.com/info-penting"
+                  className="w-full px-4 py-3 bg-gray-50 border-[1.5px] border-gray-200 rounded-xl text-sm outline-none focus:border-brand-600 focus:bg-white"
+                />
+                <p className="text-[10px] text-gray-400 mt-1">
+                  💡 Link akan otomatis ditambahkan <code>https://</code> jika belum ada. User bisa klik atau salin link ini.
+                </p>
               </div>
 
               <div>
